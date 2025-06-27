@@ -16,9 +16,15 @@ import (
 	redisClient "qiscus-agent-allocation/pkg/redis"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/joho/godotenv"
 )
 
 func main() {
+	// Load .env
+	if err := godotenv.Load(); err != nil {
+		log.Println("Warning: .env file not loaded:", err)
+	}
+
 	// Load configuration
 	cfg := config.Load()
 

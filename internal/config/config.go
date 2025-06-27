@@ -1,6 +1,7 @@
 package config
 
 import (
+	"log"
 	"os"
 	"time"
 )
@@ -38,6 +39,9 @@ func Load() *Config {
 	if qiscusBaseURL == "" {
 		qiscusBaseURL = "https://omnichannel.qiscus.com"
 	}
+
+	log.Println("Qiscus App ID:", os.Getenv("QISCUS_APP_ID"))
+	log.Println("Qiscus Secret Key:", os.Getenv("QISCUS_SECRET_KEY"))
 
 	return &Config{
 		Port:           port,

@@ -86,7 +86,8 @@ func (h *WebhookHandler) HandleIncoming(w http.ResponseWriter, r *http.Request) 
 }
 
 func (h *WebhookHandler) HandleResolved(w http.ResponseWriter, r *http.Request) {
-	var webhook entity.QiscusWebhook
+	var webhook entity.QiscusResolvedWebhook
+
 	if err := json.NewDecoder(r.Body).Decode(&webhook); err != nil {
 		log.Printf("Failed to decode webhook: %v", err)
 		http.Error(w, "Invalid payload", http.StatusBadRequest)
@@ -94,28 +95,28 @@ func (h *WebhookHandler) HandleResolved(w http.ResponseWriter, r *http.Request) 
 	}
 
 	// 2. Validate webhook payload
-	if webhook.RoomID == "" {
+	if webhook.Service.RoomID == "" {
 		log.Println("Invalid webhook payload: missing room_id")
 		http.Error(w, "Missing required fields", http.StatusBadRequest)
 		return
 	}
 
 	// Skip if not resolved
-	if !webhook.IsResolved {
-		log.Printf("Chat not resolved yet, skipping: Room %s", webhook.RoomID)
+	if !webhook.Service.IsResolved {
+		log.Printf("Chat not resolved yet, skipping: Room %s", webhook.Service.RoomID)
 		w.WriteHeader(http.StatusOK)
 		return
 	}
 
 	// 3. Update Agent Capacity (Redis -1) if agent exists
-	if webhook.CandidateAgent.ID > 0 {
-		agentID := fmt.Sprintf("%d", webhook.CandidateAgent.ID)
+	if webhook.ResolvedBy.ID > 0 {
+		agentID := fmt.Sprintf("%d", webhook.ResolvedBy.ID)
 		err := h.allocationUsecase.DecrementAgentCapacity(agentID)
 		if err != nil {
 			log.Printf("Failed to decrement agent capacity: %v", err)
-			// Continue processing even if this fails
 		}
-		log.Printf("Chat resolved: Room %s, Agent %s", webhook.RoomID, agentID)
+		log.Printf("Chat resolved: Room %s, Agent %s (%s)",
+			webhook.Service.RoomID, agentID, webhook.ResolvedBy.Name)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
