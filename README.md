@@ -19,11 +19,22 @@ This is a service to allocate chat to the agent available, eliminating the proce
 
 Currently it can only provide the same amount of max customer of all agent. It can be modified from redis and the default amount of it in the env file
 
-### Built With
 
-1. Golang - Handle most of the process
-2. Redis - Queue system of the webhook
-3. Docker - Providing self hosted Redis database
+## Architecture Overview
+┌─────────────────┐    ┌─────────────────┐    ┌─────────────────┐
+│   Qiscus API    │    │  Our Service    │    │   Redis Cache   │
+│                 │    │                 │    │                 │
+│ • Webhooks      │◄──►│ • Queue Mgmt    │◄──►│ • FIFO Queue    │
+│ • Agent API     │    │ • Worker        │    │ • Agent Capacity│
+│ • Assignment    │    │ • HTTP Server   │    │ • Configuration │
+└─────────────────┘    └─────────────────┘    └─────────────────┘
+
+### Tech Stack
+
+1. Backend: Go 1.24 with Chi Router
+2. Cache: Redis 7.0
+3. Architecture: Clean Architecture + Repository Pattern
+4. API: RESTful webhooks integration
 
 <p align="right">(<a href="#readme-top">back to top</a>)</p>
 
@@ -45,6 +56,7 @@ How to setup the service
 1. Clone the repo
    ```sh
    git clone https://github.com/1234iqbal/omnichannel-qiscus
+   cd omnichannel-qiscus
    ```
 2. Install go packages
    ```sh
@@ -63,9 +75,21 @@ How to setup the service
    make run
    ```
 
-<!-- USAGE EXAMPLES -->
+### Redis Data Structure
 
-## How It Works?
+# Customer Queue (FIFO)
+```
+customer_queue: [
+  '{"customer_id":"user@email.com","room_id":"123","channel":"whatsapp","timestamp":"2025-06-28T10:00:00Z"}'
+]
+```
+
+# Agent Capacity Tracking
+```
+agent_capacity:176926 = "2"  # Current customers
+agent_capacity:176927 = "1" 
+```
+
 
 ### Flow Chart
 1. WebHook Incomeing.
