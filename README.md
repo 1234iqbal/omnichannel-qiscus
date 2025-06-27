@@ -44,7 +44,7 @@ How to setup the service
 
 1. Clone the repo
    ```sh
-   git clone https://github.com/victor-divo/custom-agent-service.git
+   git clone https://github.com/1234iqbal/omnichannel-qiscus
    ```
 2. Install go packages
    ```sh
@@ -62,21 +62,6 @@ How to setup the service
    ```sh
    make up
    ```
-5. Open the redis browser http://localhost:5540 and add max agent config.
-
-   Add connection to Redis database (default url redis://default@redis:6379)
-
-   In redis cli change n to desired number
-
-   ```cli
-   SET config:max_agent_chat n
-   ```
-
-6. Run the service
-   ```sh
-   go run cmd/main.go
-   ```
-   If you want to debug, run the default vscode debuger
 
 <!-- USAGE EXAMPLES -->
 
@@ -84,12 +69,15 @@ How to setup the service
 
 ### Flow Chart
 1. WebHook Incomeing.
+
 ![alt text](image-2.png)
 
 2. Worker
+
 ![alt text](image-4.png)
 
 3. Webhook Resolve
+
 ![alt text](image-3.png)
 
 ### Sequence Diagram
