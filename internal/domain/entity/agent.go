@@ -1,33 +1,33 @@
 package entity
 
-import "time"
-
 type Agent struct {
-	ID            string    `json:"id"`
-	Name          string    `json:"name"`
-	Email         string    `json:"email"`
-	IsOnline      bool      `json:"is_online"`
-	MaxConcurrent int       `json:"max_concurrent"`
-	CurrentChats  int       `json:"current_chats"`
-	LastAssigned  time.Time `json:"last_assigned"`
+	ID          string `json:"id"`
+	Name        string `json:"name"`
+	Email       string `json:"email"`
+	IsAvailable bool   `json:"is_available"`
 }
 
-type AgentStatusUpdate struct {
-	IsOnline      *bool `json:"is_online"`
-	MaxConcurrent *int  `json:"max_concurrent"`
+type QiscusAgent struct {
+	ID          int    `json:"id"`
+	Name        string `json:"name"`
+	Email       string `json:"email"`
+	IsAvailable bool   `json:"is_available"`
 }
 
-func (a *Agent) CanTakeMoreChats() bool {
-	return a.IsOnline && a.CurrentChats < a.MaxConcurrent
+type GetAgentsResponse struct {
+	Status int `json:"status"`
+	Data   struct {
+		Agents []QiscusAgent `json:"agents"`
+	} `json:"data"`
 }
 
-func (a *Agent) AssignChat() {
-	a.CurrentChats++
-	a.LastAssigned = time.Now()
+type AssignAgentRequest struct {
+	RoomID  string `json:"room_id"`
+	AgentID string `json:"agent_id"`
 }
 
-func (a *Agent) ResolveChat() {
-	if a.CurrentChats > 0 {
-		a.CurrentChats--
-	}
+type AssignAgentResponse struct {
+	Status  int         `json:"status"`
+	Data    interface{} `json:"data"`
+	Message string      `json:"message,omitempty"`
 }

@@ -60,7 +60,7 @@ How to setup the service
    ```
    or
    ```sh
-   make up
+   make run
    ```
 
 <!-- USAGE EXAMPLES -->

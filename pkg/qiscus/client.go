@@ -2,12 +2,11 @@ package qiscus
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
+	"qiscus-agent-allocation/internal/domain/entity"
 	"time"
 )
 
@@ -23,31 +22,6 @@ type Config struct {
 	AppID     string
 	SecretKey string
 	Timeout   time.Duration
-}
-
-type AssignAgentRequest struct {
-	RoomID  string `json:"room_id"`
-	AgentID string `json:"agent_id"`
-}
-
-type AssignAgentResponse struct {
-	Status  int         `json:"status"`
-	Data    interface{} `json:"data"`
-	Message string      `json:"message,omitempty"`
-}
-
-type GetAgentsResponse struct {
-	Status int `json:"status"`
-	Data   struct {
-		Agents []QiscusAgent `json:"agents"`
-	} `json:"data"`
-}
-
-type QiscusAgent struct {
-	ID          int    `json:"id"`
-	Name        string `json:"name"`
-	Email       string `json:"email"`
-	IsAvailable bool   `json:"is_available"`
 }
 
 func NewClient(config Config) *Client {
@@ -69,78 +43,86 @@ func NewClient(config Config) *Client {
 	}
 }
 
-func (c *Client) AssignAgent(ctx context.Context, roomID, agentID string) (*AssignAgentResponse, error) {
-	endpoint := "/api/v2/admin/service/assign_agent"
+func (c *Client) GetAgents() ([]entity.QiscusAgent, error) {
+	url := "/api/v2/admin/agents"
 
-	// Prepare form data
-	data := url.Values{}
-	data.Set("room_id", roomID)
-	data.Set("agent_id", agentID)
-
-	req, err := http.NewRequestWithContext(ctx, "POST", c.baseURL+endpoint, bytes.NewBufferString(data.Encode()))
+	req, err := http.NewRequest("GET", c.baseURL+url, nil)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create request: %w", err)
 	}
 
 	// Set headers
-	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
-	req.Header.Set("Qiscus-App-Id", "bgwus-6yz8hekllunun4v")
-	req.Header.Set("Qiscus-Secret-Key", "1d2dfa68b6aef75b8407fc89a532b143")
+	req.Header.Set("Qiscus-App-Id", c.appID)
+	req.Header.Set("Qiscus-Secret-Key", c.secretKey)
 
+	// Make HTTP request
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("failed to make request: %w", err)
 	}
 	defer resp.Body.Close()
 
+	// Read response body
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
+		return nil, fmt.Errorf("failed to read response: %w", err)
 	}
 
-	var assignResponse AssignAgentResponse
-	if err := json.Unmarshal(body, &assignResponse); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
-	}
-
+	// Check status code
 	if resp.StatusCode != http.StatusOK {
-		return &assignResponse, fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, assignResponse.Message)
+		return nil, fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
-	return &assignResponse, nil
+	// Parse JSON response
+	var response entity.GetAgentsResponse
+	if err := json.Unmarshal(body, &response); err != nil {
+		return nil, fmt.Errorf("failed to parse response: %w", err)
+	}
+
+	return response.Data.Agents, nil
 }
 
-func (c *Client) GetAgents(ctx context.Context) (*GetAgentsResponse, error) {
-	endpoint := "/api/v2/admin/agents"
+func (c *Client) AssignAgent(roomID, agentID string) error {
+	url := "/api/v1/admin/service/assign_agent"
 
-	req, err := http.NewRequestWithContext(ctx, "GET", c.baseURL+endpoint, nil)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+	// Prepare request body
+	requestBody := entity.AssignAgentRequest{
+		RoomID:  roomID,
+		AgentID: agentID,
 	}
 
-	// Set headers
-	req.Header.Set("Qiscus-App-Id", "bgwus-6yz8hekllunun4v")
-	req.Header.Set("Qiscus-Secret-Key", "1d2dfa68b6aef75b8407fc89a532b143")
+	jsonBody, err := json.Marshal(requestBody)
+	if err != nil {
+		return fmt.Errorf("failed to marshal request: %w", err)
+	}
 
+	req, err := http.NewRequest("POST", c.baseURL+url, bytes.NewBuffer(jsonBody))
+	if err != nil {
+		return fmt.Errorf("failed to create request: %w", err)
+	}
+
+	// Add authentication headers
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Qiscus-App-Id", c.appID)
+	req.Header.Set("Qiscus-Secret-Key", c.secretKey)
+
+	// Make HTTP request
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("failed to make request: %w", err)
+		return fmt.Errorf("failed to make request: %w", err)
 	}
 	defer resp.Body.Close()
 
+	// Read response body
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response body: %w", err)
+		return fmt.Errorf("failed to read response: %w", err)
 	}
 
-	var agentsResponse GetAgentsResponse
-	if err := json.Unmarshal(body, &agentsResponse); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal response: %w", err)
+	// Check status code
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
+		return fmt.Errorf("API request failed with status %d: %s", resp.StatusCode, string(body))
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		return &agentsResponse, fmt.Errorf("API request failed with status %d", resp.StatusCode)
-	}
-
-	return &agentsResponse, nil
+	return nil
 }

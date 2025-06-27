@@ -1,7 +1,7 @@
 package usecase
 
 import (
-	"context"
+	"encoding/json"
 	"fmt"
 	"log"
 
@@ -11,8 +11,16 @@ import (
 )
 
 type AllocationUsecase interface {
-	ProcessIncomingMessage(ctx context.Context, roomLog entity.RoomLog) (*entity.AssignmentResponse, error)
-	ProcessResolvedMessage(ctx context.Context, roomLog entity.RoomLog) (*entity.AssignmentResponse, error)
+	IsInQueue(roomID, channel, customerID string) (bool, error)
+	AddToQueue(item entity.QueueItem) error
+	GetFromQueue() (string, error)
+
+	// Agent operations
+	GetOnlineAgents() ([]entity.Agent, error)
+	AssignAgent(roomID, agentID string) error
+	GetAgentCapacity(agentID string) (int, error)
+	IncrementAgentCapacity(agentID string) error
+	DecrementAgentCapacity(agentID string) error
 }
 
 type allocationUsecase struct {
@@ -33,171 +41,103 @@ func NewAllocationUsecase(
 	}
 }
 
-func (u *allocationUsecase) ProcessIncomingMessage(ctx context.Context, roomLog entity.RoomLog) (*entity.AssignmentResponse, error) {
-
-	// Step 1: Check if room already has an assigned agent
-	existingAssignment, err := u.agentRepo.FindAgentByRoomID(ctx, roomLog.RoomID)
-	if err == nil && existingAssignment != "" {
-		// Get full agent details using the agent ID
-		existingAgent, err := u.agentRepo.GetByID(ctx, existingAssignment)
-		if err == nil {
-			log.Printf("Room %s already assigned to agent %s", roomLog.RoomID, existingAgent.Email)
-			return &entity.AssignmentResponse{
-				Status:  "existing_assignment",
-				RoomID:  roomLog.RoomID,
-				Message: fmt.Sprintf("Room already assigned to agent %s", existingAgent.Name),
-				Agent:   existingAgent, // Now this is *entity.Agent
-			}, nil
-		}
-	}
-
-	// // Step 2: Get available agents from Qiscus API
-	availableAgents, err := u.agentQiscusRepo.GetAvailableAgents(ctx)
+func (u *allocationUsecase) IsInQueue(roomID, channel, customerID string) (bool, error) {
+	exists, err := u.queueRepo.Exists(roomID, channel, customerID)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get available agents: %w", err)
+		return false, fmt.Errorf("failed to check if item in queue: %w", err)
 	}
-
-	if len(availableAgents) == 0 {
-		log.Printf("No available agents found")
-		return &entity.AssignmentResponse{
-			Status:  "no_agents_available",
-			RoomID:  roomLog.RoomID,
-			Message: "No agents are currently available",
-		}, nil
-	}
-
-	// // Step 3: Get all active agents from Redis
-	allLocalAgents, err := u.agentRepo.GetAll(ctx)
-	if err != nil {
-		return nil, fmt.Errorf("failed to get local agents: %w", err)
-	}
-
-	if len(allLocalAgents) == 0 {
-		log.Printf("No agents found in local storage")
-		return &entity.AssignmentResponse{
-			Status:  "no_agents_configured",
-			RoomID:  roomLog.RoomID,
-			Message: "No agents are configured in the system",
-		}, nil
-	}
-
-	// // Step 4: Filter available agents (online and not at max capacity)
-
-	var availableAgentsCapacity []*entity.Agent
-	// Hitung jumlah room yang ditangani oleh setiap agent
-	roomCount := make(map[string]int)
-	for _, a := range assignments {
-		key := fmt.Sprintf("%d:%s", a.CompanyID, a.AgentName)
-		roomCount[key]++
-	}
-
-	// Tampilkan agent yang menangani kurang dari 2 room
-	fmt.Println("Agents handling fewer than 2 rooms:")
-	for _, ag := range allLocalAgents {
-		key := fmt.Sprintf("%d:%s", ag.CompanyID, ag.Name)
-		if roomCount[key] < 2 {
-			fmt.Printf("- %s (rooms: %d)\n", ag.Name, roomCount[key])
-		}
-	}
-
-	println("=================")
-	println("step 4")
-	println(availableAgentsCapacity)
-	println("=================")
-
-	// if len(availableAgents) == 0 {
-	// 	log.Printf("No available agents found, adding to queue")
-	// 	// Step 6: If no available agents, add to queue
-	// 	queueItem := entity.NewQueueItem(roomLog)
-	// 	err = u.queueRepo.Enqueue(ctx, queueItem)
-	// 	if err != nil {
-	// 		return nil, fmt.Errorf("failed to queue message: %w", err)
-	// 	}
-
-	// 	log.Printf("Added room %s to queue", roomLog.RoomID)
-	// 	return &entity.AssignmentResponse{
-	// 		Status:  "queued",
-	// 		RoomID:  roomLog.RoomID,
-	// 		Message: "No agents available, added to queue",
-	// 	}, nil
-	// }
-
-	// // Step 5: Select best available agent (load balancing)
-	// selectedAgent := u.selectBestAgent(availableAgents)
-	// if selectedAgent == nil {
-	// 	return nil, fmt.Errorf("failed to select agent")
-	// }
-
-	// // Assign chat to agent locally first
-	// selectedAgent.AssignChat()
-	// err = u.agentRepo.Update(ctx, selectedAgent)
-	// if err != nil {
-	// 	return nil, fmt.Errorf("failed to update agent locally: %w", err)
-	// }
-
-	// // Add room to agent's chat list
-	// err = u.agentRepo.AddChatToAgent(ctx, selectedAgent.ID, roomLog.RoomID)
-	// if err != nil {
-	// 	// Rollback agent update
-	// 	selectedAgent.ResolveChat()
-	// 	u.agentRepo.Update(ctx, selectedAgent)
-	// 	return nil, fmt.Errorf("failed to add chat to agent: %w", err)
-	// }
-
-	// // Assign agent to room via Qiscus API
-	// err = u.qiscusService.AssignAgentToRoom(ctx, roomLog.RoomID, selectedAgent.ID)
-	// if err != nil {
-	// 	// Rollback local assignment if Qiscus API fails
-	// 	log.Printf("Failed to assign agent in Qiscus, rolling back: %v", err)
-	// 	u.rollbackAgentAssignment(ctx, selectedAgent.ID, roomLog.RoomID)
-
-	// 	// Add to queue as fallback
-	// 	queueItem := entity.NewQueueItem(roomLog)
-	// 	u.queueRepo.Enqueue(ctx, queueItem)
-
-	// 	return &entity.AssignmentResponse{
-	// 		Status:  "assignment_failed_queued",
-	// 		RoomID:  roomLog.RoomID,
-	// 		Message: "Failed to assign via Qiscus API, added to queue",
-	// 	}, nil
-	// }
-
-	log.Printf("Successfully assigned room %s to agent %s (%s)",
-		roomLog.RoomID, roomLog.Name)
-
-	return &entity.AssignmentResponse{
-		Status:  "assigned",
-		RoomID:  roomLog.RoomID,
-		Message: fmt.Sprintf("Assigned to agent %s", roomLog.Name),
-	}, nil
+	return exists, nil
 }
 
-func (u *allocationUsecase) ProcessResolvedMessage(ctx context.Context, roomLog entity.RoomLog) (*entity.AssignmentResponse, error) {
-	// Find which agent was handling this chat
-	// // agentID, err := u.agentRepo.FindAgentByRoomID(ctx, roomLog.RoomID)
-	// // if err != nil {
-	// // 	return nil, fmt.Errorf("agent not found for room %s: %w", roomLog.RoomID, err)
-	// // }
-
-	// // // Remove chat from agent
-	// // err = u.removeChatFromAgent(ctx, agentID, roomLog.RoomID)
-	// // if err != nil {
-	// // 	log.Printf("Error removing chat from agent: %v", err)
-	// // }
-
-	response := &entity.AssignmentResponse{
-		Status: "resolved",
-		RoomID: roomLog.RoomID,
+func (u *allocationUsecase) AddToQueue(item entity.QueueItem) error {
+	// Convert to JSON string
+	data, err := json.Marshal(item)
+	if err != nil {
+		return fmt.Errorf("failed to marshal queue item: %w", err)
 	}
 
-	// // // Try to assign next chat from queue to this agent
-	// // nextChat, err := u.assignNextFromQueue(ctx, agentID)
-	// if err != nil {
-	// 	log.Printf("No chats in queue or error: %v", err)
-	// } else if nextChat != nil {
-	// 	log.Printf("Assigned next chat %s to agent %s", nextChat.RoomID, agentID)
-	// 	response.NextAssignment = nextChat
-	// }
+	// Add to Redis queue (LPUSH for FIFO)
+	err = u.queueRepo.Push(string(data))
+	if err != nil {
+		return fmt.Errorf("failed to push to queue: %w", err)
+	}
 
-	return response, nil
+	log.Printf("Added to queue: %s", string(data))
+	return nil
+}
+
+// GetFromQueue gets next customer from Redis queue (FIFO)
+func (u *allocationUsecase) GetFromQueue() (string, error) {
+	// Get from Redis queue (RPOP for FIFO)
+	data, err := u.queueRepo.Pop()
+	if err != nil {
+		return "", fmt.Errorf("failed to pop from queue: %w", err)
+	}
+
+	return data, nil
+}
+
+// GetOnlineAgents fetches online agents from Qiscus API
+func (u *allocationUsecase) GetOnlineAgents() ([]entity.Agent, error) {
+	// Get agents from Qiscus API
+	qiscusAgents, err := u.agentQiscusRepo.GetOnlineAgents()
+	if err != nil {
+		return nil, fmt.Errorf("failed to get online agents: %w", err)
+	}
+
+	// Convert to our Agent struct
+	var agents []entity.Agent
+	for _, qAgent := range qiscusAgents {
+		agents = append(agents, entity.Agent{
+			ID:          fmt.Sprintf("%d", qAgent.ID),
+			Name:        qAgent.Name,
+			IsAvailable: qAgent.IsAvailable,
+		})
+	}
+
+	return agents, nil
+}
+
+// AssignAgent assigns agent to customer via Qiscus API
+func (u *allocationUsecase) AssignAgent(roomID, agentID string) error {
+	// Call Qiscus API to assign agent
+	err := u.agentQiscusRepo.AssignAgent(roomID, agentID)
+	if err != nil {
+		return fmt.Errorf("failed to assign agent: %w", err)
+	}
+
+	log.Printf("Successfully assigned agent %s to room %s", agentID, roomID)
+	return nil
+}
+
+// GetAgentCapacity gets current agent capacity from Redis
+func (u *allocationUsecase) GetAgentCapacity(agentID string) (int, error) {
+	capacity, err := u.agentRepo.GetCapacity(agentID)
+	if err != nil {
+		return 0, fmt.Errorf("failed to get agent capacity: %w", err)
+	}
+
+	return capacity, nil
+}
+
+// IncrementAgentCapacity increases agent capacity by 1
+func (u *allocationUsecase) IncrementAgentCapacity(agentID string) error {
+	err := u.agentRepo.IncrementCapacity(agentID)
+	if err != nil {
+		return fmt.Errorf("failed to increment agent capacity: %w", err)
+	}
+
+	log.Printf("Incremented capacity for agent %s", agentID)
+	return nil
+}
+
+// DecrementAgentCapacity decreases agent capacity by 1
+func (u *allocationUsecase) DecrementAgentCapacity(agentID string) error {
+	err := u.agentRepo.DecrementCapacity(agentID)
+	if err != nil {
+		return fmt.Errorf("failed to decrement agent capacity: %w", err)
+	}
+
+	log.Printf("Decremented capacity for agent %s", agentID)
+	return nil
 }

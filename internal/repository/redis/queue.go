@@ -3,8 +3,7 @@ package redis
 import (
 	"context"
 	"encoding/json"
-
-	"qiscus-agent-allocation/internal/domain/entity"
+	"fmt"
 
 	"github.com/go-redis/redis/v8"
 )
@@ -14,11 +13,9 @@ const (
 )
 
 type QueueRepository interface {
-	Enqueue(ctx context.Context, item *entity.QueueItem) error
-	Dequeue(ctx context.Context) (*entity.QueueItem, error)
-	GetAll(ctx context.Context) ([]*entity.QueueItem, error)
-	Size(ctx context.Context) (int, error)
-	Clear(ctx context.Context) error
+	Push(data string) error
+	Pop() (string, error)
+	Exists(roomID, channel, customerID string) (bool, error)
 }
 
 type queueRepository struct {
@@ -31,57 +28,64 @@ func NewQueueRepository(client *redis.Client) QueueRepository {
 	}
 }
 
-func (r *queueRepository) Enqueue(ctx context.Context, item *entity.QueueItem) error {
-	itemJSON, err := json.Marshal(item)
+func (r *queueRepository) Push(data string) error {
+	ctx := context.Background()
+
+	// LPUSH adds to the left (beginning) of the list
+	err := r.client.LPush(ctx, QueueKey, data).Err()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to push to queue: %w", err)
 	}
 
-	// LPUSH for FIFO (Left Push, Right Pop)
-	return r.client.LPush(ctx, QueueKey, itemJSON).Err()
+	return nil
 }
 
-func (r *queueRepository) Dequeue(ctx context.Context) (*entity.QueueItem, error) {
-	itemJSON, err := r.client.RPop(ctx, QueueKey).Result()
-	if err != nil {
-		if err == redis.Nil {
-			return nil, nil // Queue is empty
+func (r *queueRepository) Pop() (string, error) {
+	ctx := context.Background()
+
+	// RPOP removes and returns element from the right (end) of the list
+	// This gives us FIFO behavior when combined with LPUSH
+	result := r.client.RPop(ctx, QueueKey)
+
+	// Check if queue is empty
+	if result.Err() == redis.Nil {
+		return "", fmt.Errorf("queue is empty")
+	}
+
+	if result.Err() != nil {
+		return "", fmt.Errorf("failed to pop from queue: %w", result.Err())
+	}
+
+	return result.Val(), nil
+}
+
+// Exists checks if room_id already exists in queue
+func (r *queueRepository) Exists(roomID, channel, customerID string) (bool, error) {
+	ctx := context.Background()
+
+	// Get all items in queue without removing them (LRANGE)
+	result := r.client.LRange(ctx, QueueKey, 0, -1)
+	if result.Err() != nil {
+		return false, fmt.Errorf("failed to check queue: %w", result.Err())
+	}
+
+	items := result.Val()
+
+	// Check each item in queue
+	for _, item := range items {
+		var queueItem map[string]interface{}
+		json.Unmarshal([]byte(item), &queueItem)
+
+		// Get fields from queue item
+		queueRoomID, _ := queueItem["room_id"].(string)
+		queueChannel, _ := queueItem["channel"].(string)
+		queueCustomerID, _ := queueItem["customer_id"].(string)
+
+		// Check exact match of all 3 fields
+		if queueRoomID == roomID && queueChannel == channel && queueCustomerID == customerID {
+			return true, nil
 		}
-		return nil, err
 	}
 
-	var item entity.QueueItem
-	err = json.Unmarshal([]byte(itemJSON), &item)
-	if err != nil {
-		return nil, err
-	}
-
-	return &item, nil
-}
-
-func (r *queueRepository) GetAll(ctx context.Context) ([]*entity.QueueItem, error) {
-	itemsJSON, err := r.client.LRange(ctx, QueueKey, 0, -1).Result()
-	if err != nil {
-		return nil, err
-	}
-
-	var items []*entity.QueueItem
-	for _, itemJSON := range itemsJSON {
-		var item entity.QueueItem
-		if err := json.Unmarshal([]byte(itemJSON), &item); err != nil {
-			continue
-		}
-		items = append(items, &item)
-	}
-
-	return items, nil
-}
-
-func (r *queueRepository) Size(ctx context.Context) (int, error) {
-	size, err := r.client.LLen(ctx, QueueKey).Result()
-	return int(size), err
-}
-
-func (r *queueRepository) Clear(ctx context.Context) error {
-	return r.client.Del(ctx, QueueKey).Err()
+	return false, nil
 }

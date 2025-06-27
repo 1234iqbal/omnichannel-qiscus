@@ -2,27 +2,20 @@ package redis
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
-
-	"qiscus-agent-allocation/internal/domain/entity"
+	"strconv"
 
 	"github.com/go-redis/redis/v8"
 )
 
 const (
-	AgentsKey        = "agents"
-	AgentChatsPrefix = "agent_chats:"
+	AgentsKey = "agents"
 )
 
 type AgentRepository interface {
-	Create(ctx context.Context, agent *entity.Agent) error
-	GetByID(ctx context.Context, agentID string) (*entity.Agent, error)
-	GetAll(ctx context.Context) ([]*entity.Agent, error)
-	Update(ctx context.Context, agent *entity.Agent) error
-	Delete(ctx context.Context, agentID string) error
-
-	FindAgentByRoomID(ctx context.Context, roomID string) (string, error)
+	GetCapacity(agentID string) (int, error)
+	IncrementCapacity(agentID string) error
+	DecrementCapacity(agentID string) error
 }
 
 type agentRepository struct {
@@ -35,93 +28,73 @@ func NewAgentRepository(client *redis.Client) AgentRepository {
 	}
 }
 
-func (r *agentRepository) Create(ctx context.Context, agent *entity.Agent) error {
-	agentJSON, err := json.Marshal(agent)
-	if err != nil {
-		return err
-	}
-
-	return r.client.HSet(ctx, AgentsKey, agent.ID, agentJSON).Err()
+// getAgentKey returns Redis key for agent capacity
+func (r *agentRepository) getAgentKey(agentID string) string {
+	return fmt.Sprintf("%s:%s", AgentsKey, agentID)
 }
 
-func (r *agentRepository) GetByID(ctx context.Context, agentID string) (*entity.Agent, error) {
-	agentJSON, err := r.client.HGet(ctx, AgentsKey, agentID).Result()
-	if err != nil {
-		if err == redis.Nil {
-			return nil, fmt.Errorf("agent not found")
-		}
-		return nil, err
+// GetCapacity gets current number of customers assigned to agent
+func (r *agentRepository) GetCapacity(agentID string) (int, error) {
+	ctx := context.Background()
+	key := r.getAgentKey(agentID)
+
+	// Get current capacity value
+	result := r.client.Get(ctx, key)
+
+	// If key doesn't exist, capacity is 0
+	if result.Err() == redis.Nil {
+		return 0, nil
 	}
 
-	var agent entity.Agent
-	err = json.Unmarshal([]byte(agentJSON), &agent)
-	if err != nil {
-		return nil, err
+	if result.Err() != nil {
+		return 0, fmt.Errorf("failed to get agent capacity: %w", result.Err())
 	}
 
-	return &agent, nil
+	// Convert string to int
+	capacity, err := strconv.Atoi(result.Val())
+	if err != nil {
+		return 0, fmt.Errorf("failed to parse capacity value: %w", err)
+	}
+
+	return capacity, nil
 }
 
-func (r *agentRepository) GetAll(ctx context.Context) ([]*entity.Agent, error) {
-	agentsMap, err := r.client.HGetAll(ctx, AgentsKey).Result()
+// IncrementCapacity increases agent's customer count by 1
+func (r *agentRepository) IncrementCapacity(agentID string) error {
+	ctx := context.Background()
+	key := r.getAgentKey(agentID)
+
+	// Use INCR to atomically increment the counter
+	// If key doesn't exist, it will be set to 1
+	err := r.client.Incr(ctx, key).Err()
 	if err != nil {
-		return nil, err
+		return fmt.Errorf("failed to increment agent capacity: %w", err)
 	}
 
-	var agents []*entity.Agent
-	for _, agentJSON := range agentsMap {
-		var agent entity.Agent
-		if err := json.Unmarshal([]byte(agentJSON), &agent); err != nil {
-			continue
-		}
-		agents = append(agents, &agent)
-	}
-
-	return agents, nil
+	return nil
 }
 
-func (r *agentRepository) Update(ctx context.Context, agent *entity.Agent) error {
-	agentJSON, err := json.Marshal(agent)
+// DecrementCapacity decreases agent's customer count by 1
+func (r *agentRepository) DecrementCapacity(agentID string) error {
+	ctx := context.Background()
+	key := r.getAgentKey(agentID)
+
+	// Get current value first to avoid going below 0
+	current, err := r.GetCapacity(agentID)
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to get current capacity: %w", err)
 	}
 
-	return r.client.HSet(ctx, AgentsKey, agent.ID, agentJSON).Err()
-}
+	// Don't decrement if already at 0
+	if current <= 0 {
+		return nil
+	}
 
-func (r *agentRepository) Delete(ctx context.Context, agentID string) error {
-	// Remove from agents hash
-	err := r.client.HDel(ctx, AgentsKey, agentID).Err()
+	// Use DECR to atomically decrement the counter
+	err = r.client.Decr(ctx, key).Err()
 	if err != nil {
-		return err
+		return fmt.Errorf("failed to decrement agent capacity: %w", err)
 	}
 
-	// Remove agent's chat set
-	return r.client.Del(ctx, AgentChatsPrefix+agentID).Err()
-}
-
-func (r *agentRepository) FindAgentByRoomID(ctx context.Context, roomID string) (string, error) {
-	agents, err := r.GetAll(ctx)
-	if err != nil {
-		return "", err
-	}
-
-	for _, agent := range agents {
-
-		isMember, err := r.client.SIsMember(ctx, AgentChatsPrefix+agent.ID, roomID).Result()
-		if err != nil {
-			println(fmt.Sprintf("Error checking agent %s: %v", agent.ID, err))
-			continue // Skip this agent if there's an error
-		}
-
-		println(fmt.Sprintf("Agent %s has room %s: %t", agent.ID, roomID, isMember))
-
-		if isMember {
-			println(fmt.Sprintf("Found! Agent %s is handling room %s", agent.ID, roomID))
-			return agent.ID, nil // Found the agent handling this room
-		}
-	}
-
-	println(fmt.Sprintf("No agent found handling room %s", roomID))
-	return "", fmt.Errorf("no agent found for room %s", roomID)
+	return nil
 }
