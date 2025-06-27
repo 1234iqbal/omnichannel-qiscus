@@ -102,21 +102,22 @@ func (w *WorkerService) processQueue() {
 }
 
 func (w *WorkerService) findAvailableAgent(agents []entity.Agent) *entity.Agent {
-	maxCapacity := 2 // Default max customers per agent
+	maxCapacity := 2
+	var selectedAgent *entity.Agent
+	minLoad := maxCapacity + 1
 
 	for _, agent := range agents {
-		// Check current capacity from Redis
 		currentCapacity, err := w.allocationUsecase.GetAgentCapacity(agent.ID)
 		if err != nil {
 			log.Printf("Failed to get capacity for agent %s: %v", agent.ID, err)
 			continue
 		}
 
-		// If agent has available slots
-		if currentCapacity < maxCapacity {
-			return &agent
+		if currentCapacity < maxCapacity && currentCapacity < minLoad {
+			selectedAgent = &agent
+			minLoad = currentCapacity
 		}
 	}
 
-	return nil
+	return selectedAgent
 }
